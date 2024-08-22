@@ -13,9 +13,9 @@ use rand::{seq::SliceRandom, thread_rng};
 use rayon::prelude::*;
 
 fn main() {
-    let matches = Command::new("Mosaic Generator")
-        .version("1.0")
-        .author("Your Name <your.email@example.com>")
+    let matches = Command::new("mosaicify")
+        .version("0.1.0")
+        .author("Namacha411 <thdyk.4.11@gmail.com>")
         .about("Generates a mosaic image from a target image and a set of source images.")
         .arg(
             Arg::new("target")
