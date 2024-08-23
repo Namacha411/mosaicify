@@ -49,6 +49,10 @@ fn main() {
                 .default_value("lab"),
         )
         .arg(
+            arg!(-o --output [OUTPUT] "output image file path")
+                .default_value("mosaic.jpg")
+        )
+        .arg(
             Arg::new("avoid_duplicates")
                 .help("Avoid using duplicate images in the mosaic")
                 .short('d')
@@ -61,6 +65,7 @@ fn main() {
     let row_size = *matches.get_one::<u32>("row_size").expect("required");
     let col_size = *matches.get_one::<u32>("col_size").expect("required");
     let images = matches.get_one::<String>("images").expect("required");
+    let output = matches.get_one::<String>("output").expect("required");
     let color_space = matches
         .get_one::<ColorSpace>("color_space")
         .expect("required");
@@ -71,6 +76,7 @@ fn main() {
         row_size,
         col_size,
         Path::new(images),
+        Path::new(output),
         color_space.to_fn(),
         avoid_duplicates,
     );
@@ -125,6 +131,7 @@ fn mosaic(
     row_size: u32,
     col_size: u32,
     images: &Path,
+    output: &Path,
     color_space: fn(&[u8; 3]) -> [f64; 3],
     avoid_duplicates: bool,
 ) {
@@ -190,7 +197,7 @@ fn mosaic(
         pb.inc(1);
     }
     target
-        .save("mosaic.jpg")
+        .save(output)
         .expect("Failed to save the mosaic image.");
     pb.finish_and_clear();
     println!("[3/3] Finished generating the mosaic image.");
