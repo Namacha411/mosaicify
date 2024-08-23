@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, fs, path::Path};
 
 use anyhow::Result;
-use clap::{Arg, ArgAction, Command};
+use clap::{arg, builder::PossibleValue, value_parser, Arg, ArgAction, Command, ValueEnum};
 use image::{
     imageops::{crop_imm, replace, resize, FilterType::Lanczos3},
     ImageReader, Rgb, RgbImage,
@@ -14,7 +14,7 @@ use rayon::prelude::*;
 
 fn main() {
     let matches = Command::new("mosaicify")
-        .version("0.1.0")
+        .version("0.2.0")
         .author("Namacha411 <thdyk.4.11@gmail.com>")
         .about("Generates a mosaic image from a target image and a set of source images.")
         .arg(
@@ -44,6 +44,11 @@ fn main() {
                 .index(4),
         )
         .arg(
+            arg!(-c --color_space [COLOR_SPACE] "Color space to use for matching tiles. Options: 'rgb' for RGB space, 'lab' for Lab space, 'gray' for grayscale.")
+                .value_parser(value_parser!(ColorSpace))
+                .default_value("lab"),
+        )
+        .arg(
             Arg::new("avoid_duplicates")
                 .help("Avoid using duplicate images in the mosaic")
                 .short('d')
@@ -56,6 +61,9 @@ fn main() {
     let row_size = *matches.get_one::<u32>("row_size").expect("required");
     let col_size = *matches.get_one::<u32>("col_size").expect("required");
     let images = matches.get_one::<String>("images").expect("required");
+    let color_space = matches
+        .get_one::<ColorSpace>("color_space")
+        .expect("required");
     let avoid_duplicates = matches.get_flag("avoid_duplicates");
 
     mosaic(
@@ -63,11 +71,63 @@ fn main() {
         row_size,
         col_size,
         Path::new(images),
+        color_space.to_fn(),
         avoid_duplicates,
     );
 }
 
-fn mosaic(target: &Path, row_size: u32, col_size: u32, images: &Path, avoid_duplicates: bool) {
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ColorSpace {
+    Rgb,
+    Lab,
+    Gray,
+}
+
+impl ColorSpace {
+    fn to_fn(&self) -> fn(&[u8; 3]) -> [f64; 3] {
+        match self {
+            ColorSpace::Rgb => identity_rgb,
+            ColorSpace::Lab => rgb2lab,
+            ColorSpace::Gray => rgb2gray,
+        }
+    }
+}
+
+impl ValueEnum for ColorSpace {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[ColorSpace::Rgb, ColorSpace::Lab, ColorSpace::Gray]
+    }
+
+    fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
+        Some(match self {
+            ColorSpace::Rgb => {
+                PossibleValue::new("rgb").help("Use RGB color space for matching tiles.")
+            }
+            ColorSpace::Lab => PossibleValue::new("lab")
+                .help("Use L*a*b* color space for more perceptually uniform matching."),
+            ColorSpace::Gray => PossibleValue::new("gray")
+                .help("Use grayscale for matching tiles based on intensity."),
+        })
+    }
+}
+
+impl std::fmt::Display for ColorSpace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.to_possible_value()
+            .expect("no values are skipped")
+            .get_name()
+            .fmt(f)
+    }
+}
+
+fn mosaic(
+    target: &Path,
+    row_size: u32,
+    col_size: u32,
+    images: &Path,
+    color_space: fn(&[u8; 3]) -> [f64; 3],
+    avoid_duplicates: bool,
+) {
     println!("[1/3] Preprocessing the target image.");
     let target = ImageReader::open(target)
         .expect("Failed to open the target image.")
@@ -112,7 +172,7 @@ fn mosaic(target: &Path, row_size: u32, col_size: u32, images: &Path, avoid_dupl
                 if avoid_duplicates && used.contains(&i) {
                     return None;
                 }
-                if let Some(s) = similarity(&block_image, img) {
+                if let Some(s) = similarity(&block_image, img, color_space) {
                     Some((s, i, img))
                 } else {
                     None
@@ -152,7 +212,10 @@ fn small_lab(img: &RgbImage, width: u32, height: u32) -> RgbImage {
     resize(img, width, height, Lanczos3)
 }
 
-fn similarity(a: &RgbImage, b: &RgbImage) -> Option<f64> {
+fn similarity<F>(a: &RgbImage, b: &RgbImage, color_transform: F) -> Option<f64>
+where
+    F: Fn(&[u8; 3]) -> [f64; 3],
+{
     if !(a.height() == b.height() && a.width() == b.width()) {
         return None;
     }
@@ -161,10 +224,10 @@ fn similarity(a: &RgbImage, b: &RgbImage) -> Option<f64> {
         .map(|(x, y, pixel)| {
             let Rgb(a_rgb) = pixel;
             let Rgb(b_rgb) = b.get_pixel(x, y);
-            let a_lab = rgb2lab(a_rgb);
-            let b_lab = rgb2lab(b_rgb);
+            let a_tr = color_transform(a_rgb);
+            let b_tr = color_transform(b_rgb);
             (0..3)
-                .map(|i| (a_lab[i] - b_lab[i]).pow(2))
+                .map(|i| (a_tr[i] - b_tr[i]).pow(2))
                 .sum::<f64>()
                 .sqrt()
         })
@@ -172,12 +235,20 @@ fn similarity(a: &RgbImage, b: &RgbImage) -> Option<f64> {
     Some(s)
 }
 
+fn rgb2gray(rgb: &[u8; 3]) -> [f64; 3] {
+    let [r, g, b] = rgb.map(|c| c as f64);
+    let gray = r * 0.3 + g * 0.59 + b * 0.11;
+    [gray, 0.0, 0.0]
+}
+
+fn identity_rgb(rgb: &[u8; 3]) -> [f64; 3] {
+    rgb.map(|c| c as f64)
+}
+
 /// https://en.wikipedia.org/wiki/CIELAB_color_space
 /// lを２倍に
 fn rgb2lab(rgb: &[u8; 3]) -> [f64; 3] {
-    let mut r = rgb[0] as f64 / 255_f64;
-    let mut g = rgb[1] as f64 / 255_f64;
-    let mut b = rgb[2] as f64 / 255_f64;
+    let [mut r, mut g, mut b] = rgb.map(|c| c as f64 / 255.0);
     r = if r > 0.04045 {
         f64::powf((r + 0.055) / 1.055, 2.4)
     } else {
