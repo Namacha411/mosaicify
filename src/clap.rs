@@ -49,5 +49,12 @@ pub fn get_matches() -> ArgMatches {
                 .long("avoid-duplicates")
                 .action(ArgAction::SetTrue),
         )
+        .arg(
+            Arg::new("gpu")
+                .help("Use GPU acceleration (requires CUDA)")
+                .short('g')
+                .long("gpu")
+                .action(ArgAction::SetTrue),
+        )
         .get_matches()
 }
